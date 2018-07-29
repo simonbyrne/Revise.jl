@@ -30,7 +30,7 @@ function funcdef_expr(ex)
         if ex.args[1] isa GlobalRef && ex.args[1].name == Symbol("@doc")
             return funcdef_expr(ex.args[end])
         elseif ex.args[1] ∈ (Symbol("@inline"), Symbol("@noinline"))
-            return funcdef_expr(first(LineSkippingIterator(ex.args[2:end])))
+            return funcdef_expr(ex.args[3])
         else
             io = IOBuffer()
             dump(io, ex)
@@ -49,8 +49,8 @@ end
 
 function funcdef_body(ex)
     fex = funcdef_expr(ex)
-    if ex.head == :function || ex.head == :(=)
-        return ex.args[end]
+    if fex.head == :function || fex.head == :(=)
+        return fex.args[end]
     end
     throw(ArgumentError(string("expected function definition expression, got ", ex)))
 end

@@ -7,6 +7,8 @@ using Pkg, Unicode, Distributed
 using OrderedCollections: OrderedSet
 
 include("common.jl")
+include("captures.jl")
+Revise.track("captures.jl")
 
 to_remove = String[]
 
@@ -853,6 +855,60 @@ revise_f(x) = 2
         finally
             Revise.tracking_Main_includes[] = false  # restore old behavior
         end
+    end
+
+    @testset "Capture" begin
+        # Coverage here is only partial because it's difficult to test interactive utilities
+        @test_throws ErrorException("oops") ReviseCapture.errors_on(1:5, 3)
+        @test ReviseCapture.errors_on(1:5, 8) == 5
+        # Snoop on the "outer" method
+        m = first(methods(ReviseCapture.errors_on))
+        @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 3)"; on_err=true)  == (:vec, :val)
+        @test Revise.saved_args[] == (1:5, 3)
+        @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 8)"; on_err=false) == (:vec, :val)
+        @test Revise.saved_args[] == (1:5, 8)
+        # Snoop on the "inner" method
+        m = first(methods(ReviseCapture.err_on))
+        @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 3)"; on_err=true)  == (:x, :val)
+        @test Revise.saved_args[] == (3, 3)
+        @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 8)"; on_err=false) == (:x, :val)
+        @test Revise.saved_args[] == (5, 8)
+
+        # Execute a command that doesn't call the captured method
+        @test Revise.capture(m, "sum(1:5)"; on_err=false) == (:x, :val)
+        @test Revise.saved_args[] === nothing
+
+        # Make sure the cleanup worked
+        Revise.saved_args[] = "junk"
+        @test_throws ErrorException("oops") ReviseCapture.errors_on(1:5, 3)
+        @test Revise.saved_args[] == "junk"
+        @test ReviseCapture.err_on(1, 2) == 1
+        @test Revise.saved_args[] == "junk"
+        @test_throws ErrorException("oops") ReviseCapture.err_on(1, 1)
+        @test Revise.saved_args[] == "junk"
+
+        # let blocks
+        m = first(methods(ReviseCapture.param))
+        @test Revise.capture(m, "ReviseCapture.param(Int[])") == (:z, :a, :kwarg)
+        @test Revise.saved_args[] == (Int[], "", false)
+        @test ReviseCapture.Tval[] == Int
+        ReviseCapture.Tval[] = nothing
+        @test Revise.capture(m, "ReviseCapture.param(view(1:5, 2:3), \"override\"; kwarg=true)"; params=true) == (:z, :a, :kwarg, :S, :T)
+        @test Revise.saved_args[] == (2:3, "override", true, typeof(view(1:5, 2:3)), Int)
+        @test ReviseCapture.Tval[] == Int
+        ReviseCapture.Tval[] = nothing
+        ref = Revise.generate_let_command!(Ref{Any}(nothing), m, "ReviseCapture.param(Int[])", "annot")
+        @test occursin("(z, a, kwarg, S, T", ref[])
+        @test occursin(r"@eval .*ReviseCapture", ref[])
+        @test occursin("# annot", ref[])
+        @test_throws ErrorException("oops") eval(Meta.parse(ref[]))
+
+        # snoop_method
+        m = first(methods(ReviseCapture.snoop3))
+        cmd = Revise._snoop_method(m, "ReviseCapture.snoop0()")
+        @test occursin("word1, word2, word3, adv, T", cmd)
+        @test occursin("# ReviseCapture.snoop0()", cmd)
+        @test Revise.saved_args[] == ("Spy", "on", "arguments", "simply", String)
     end
 
     @testset "Distributed" begin

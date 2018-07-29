@@ -51,6 +51,7 @@ include("exprutils.jl")
 include("pkgs.jl")
 include("git.jl")
 include("recipes.jl")
+include("capture.jl")
 
 ### Globals to keep track of state
 
@@ -235,7 +236,7 @@ function eval_and_insert!(fmm::FMMaps, mod::Module, pr::Pair)
     catch err
         @error "failure to evaluate changes in $mod"
         showerror(stderr, err)
-        println_maxlines(stderr, "\n", ex; maxlines=20)
+        println_maxsize(stderr, "\n", ex; maxlines=20)
     end
     return fmm
 end
@@ -339,31 +340,15 @@ function revise_file_now(file)
         error(file, " is not currently being tracked.")
     end
     fi = fileinfos[file]
-    topmod = first(keys(fi.fm))
-    if isempty(fi.fm)
-        # Source was never parsed, get it from the precompile cache
-        src = read_from_cache(fi, file)
-        if parse_source!(fi.fm, src, Symbol(file), 1, topmod) === nothing
-            @error "failed to parse cache file source text for $file"
-        end
-        instantiate_sigs!(fi.fm)
-    end
+    maybe_parse_from_cache!(fi, file)
     fmref = fi.fm
+    topmod = first(keys(fi.fm))
     fmnew = parse_source(file, topmod)
     if fmnew != nothing
         fmrep = eval_revised(fmnew, fmref)
         fileinfos[file] = FileInfo(fmrep, fi)
     end
     nothing
-end
-
-function read_from_cache(fm::FileInfo, file::AbstractString)
-    if fm.cachefile == basesrccache
-        return open(basesrccache) do io
-            Base._read_dependency_src(io, file)
-        end
-    end
-    Base.read_dependency_src(fm.cachefile, file)
 end
 
 function instantiate_sigs!(fm::FileModules)
@@ -525,7 +510,9 @@ function get_method(@nospecialize(sigt))
     return nothing
 end
 
-function println_maxlines(io::IO, args...; maxlines::Integer=20)
+overwrite!(dest::AbstractVector, src) = copyto!(resize!(dest, length(src)), src)
+
+function println_maxsize(io::IO, args...; maxchars::Integer=500, maxlines::Integer=20)
     # This is dumb but certain to work
     iotmp = IOBuffer()
     for a in args
@@ -533,7 +520,11 @@ function println_maxlines(io::IO, args...; maxlines::Integer=20)
     end
     print(iotmp, '\n')
     seek(iotmp, 0)
-    lines = readlines(iotmp)
+    str = read(iotmp, String)
+    if length(str) > maxchars
+        str = first(str, (maxchars+1)÷2) * "…" * last(str, maxchars - (maxchars+1)÷2)
+    end
+    lines = split(str, '\n')
     if length(lines) <= maxlines
         for line in lines
             println(io, line)
@@ -549,6 +540,7 @@ function println_maxlines(io::IO, args...; maxlines::Integer=20)
         println(io, lines[i])
     end
 end
+println_maxsize(args...; kwargs...) = println_maxsize(stdout, args...; kwargs...)
 
 function fix_line_statements!(ex::Expr, file::Symbol, line_offset::Int=0)
     if ex.head == :line
@@ -570,6 +562,13 @@ file_line_statement(lnn::LineNumberNode, file::Symbol, line_offset) =
     LineNumberNode(lnn.line + line_offset, file)
 
 function update_stacktrace_lineno!(trace)
+    # Preserve the stacktrace for capture
+    # (write before the correction, so we can re-correct later if necessary)
+    overwrite!(last_stacktrace, trace)
+    fix_stacktrace_lineno!(trace)
+end
+
+function fix_stacktrace_lineno!(trace)
     for i = 1:length(trace)
         t, n = trace[i]
         if t.linfo isa Core.MethodInstance

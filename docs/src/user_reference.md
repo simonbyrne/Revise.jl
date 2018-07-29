@@ -7,6 +7,7 @@ Other user-level constructs might apply if you want to exclude Revise from watch
 ```@docs
 revise
 Revise.track
+Revise.customize_keys
 Revise.dont_watch_pkgs
 Revise.silence
 ```

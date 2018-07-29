@@ -80,6 +80,12 @@ Revise.eval_revised
 Revise.get_method
 ```
 
+### Argument capture
+
+```@docs
+Revise.capture
+```
+
 ### Parsing source code
 
 ```@docs
