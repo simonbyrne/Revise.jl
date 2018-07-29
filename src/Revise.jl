@@ -194,11 +194,16 @@ function eval_revised!(fmmrep::FMMaps, mod::Module,
     # Delete any methods missing in fmmnew
     for (sigt,_) in fmmref.sigtmap
         if !haskey(fmmrep.sigtmap, sigt)
-            m = get_method(mod, sigt)
+            m = get_method(sigt)
             if isa(m, Method)
                 Base.delete_method(m)
             else
-                @warn "no method found for signature $sigt"
+                mths = Base._methods_by_ftype(sigt, -1, typemax(UInt))
+                io = IOBuffer()
+                println(io, "Extracted method table:")
+                println(io, mths)
+                info = String(take!(io))
+                @warn "Revise failed to find any methods for signature $sigt\n  Perhaps it was already deleted.\n$info"
             end
         end
     end
@@ -476,6 +481,49 @@ end
 silence(pkg::AbstractString) = silence(Symbol(pkg))
 
 ## Utilities
+
+"""
+    m = get_method(sigt)
+
+Get the method `m` with signature-type `sigt`. This is used to provide
+the method to `Base.delete_method`. See also [`get_signature`](@ref).
+
+If `sigt` does not correspond to a method, returns `nothing`.
+
+# Examples
+
+```jldoctest; setup = :(using Revise), filter = r"in Main at.*"
+julia> mymethod(::Int) = 1
+mymethod (generic function with 1 method)
+
+julia> mymethod(::AbstractFloat) = 2
+mymethod (generic function with 2 methods)
+
+julia> Revise.get_method(Tuple{typeof(mymethod), Int})
+mymethod(::Int64) in Main at REPL[0]:1
+
+julia> Revise.get_method(Tuple{typeof(mymethod), Float64})
+mymethod(::AbstractFloat) in Main at REPL[1]:1
+
+julia> Revise.get_method(Tuple{typeof(mymethod), Number})
+
+```
+"""
+function get_method(@nospecialize(sigt))
+    mths = Base._methods_by_ftype(sigt, -1, typemax(UInt))
+    length(mths) == 1 && return mths[1][3]
+    if !isempty(mths)
+        # There might be many methods, but the one that should match should be the
+        # last one, since methods are ordered by specificity
+        i = lastindex(mths)
+        while i > 0
+            m = mths[i][3]
+            m.sig == sigt && return m
+            i -= 1
+        end
+    end
+    return nothing
+end
 
 function println_maxlines(io::IO, args...; maxlines::Integer=20)
     # This is dumb but certain to work

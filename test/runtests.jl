@@ -682,6 +682,7 @@ dfltargs(x::Int8, y::Int=0, z::Float32=1.0f0) = x+y+z
 
 hasmacro1(@nospecialize(x)) = x
 hasmacro2(@nospecialize(x::Int)) = x
+hasmacro3(@nospecialize(x::Int), y::Float64) = x
 
 hasdestructure1(x, (count, name)) = name^count
 hasdestructure2(x, (count, name)::Tuple{Int,Any}) = name^count
@@ -700,6 +701,7 @@ end
         @test MethDel.k(1; badchoice=2) == 2
         @test MethDel.hasmacro1(1) == 1
         @test MethDel.hasmacro2(1) == 1
+        @test MethDel.hasmacro3(1, 0.0) == 1
         @test MethDel.hasdestructure1(0, (3, "hi")) == "hihihi"
         @test MethDel.hasdestructure2(0, (3, "hi")) == "hihihi"
         @test Base.revisefoo(1.0) == 1
@@ -732,6 +734,7 @@ end
         @test MethDel.k(1; goodchoice=10) == 10
         @test_throws MethodError MethDel.hasmacro1(1)
         @test_throws MethodError MethDel.hasmacro2(1)
+        @test_throws MethodError MethDel.hasmacro3(1, 0.0)
         @test_throws MethodError MethDel.hasdestructure1(0, (3, "hi"))
         @test_throws MethodError MethDel.hasdestructure2(0, (3, "hi"))
         @test Base.revisefoo(1.0) == 1
