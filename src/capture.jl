@@ -3,7 +3,7 @@ import REPL.LineEdit
 
 const SF = Tuple{Base.StackFrame,Int}
 const last_stacktrace   = SF[]
-const saved_stacktrace  = SF[]
+const saved_stacktrace  = Union{SF,Method}[]
 const saved_command     = Ref("")
 const saved_args        = Ref{Any}(nothing)
 const saved_let_command = Ref{Any}(nothing)
@@ -87,26 +87,6 @@ end
 capture(method::Method, command::AbstractString; kwargs...) =
     capture(method, Meta.parse(command); kwargs...)
 
-"""
-    snoop_method(method, command)
-
-Populate the `julia>` prompt with a `let` block that extracts the input arguments and
-type-parameters to `method` when executing `command`.
-The `let` block will also include the body-source of `method`, which you can edit
-as desired before executing the block.
-"""
-function snoop_method(method, command)
-    letcmd = _snoop_method(method, command)
-    LineEdit.edit_insert(Base.active_repl.mistate, chomp(letcmd))
-    nothing
-end
-
-function _snoop_method(method, command)
-    ref = generate_let_command!(Ref{Any}(nothing), method, command, command; on_err=false)
-    ref === nothing && return nothing
-    ref[]
-end
-
 function generate_let_command!(refstring::Ref, method, command, annotation; on_err::Bool=false)
     method === nothing && return nothing
     methodvars = capture(method, command; on_err=on_err, params=true)
@@ -158,6 +138,48 @@ function methtrace_selection(s)
     return n, nothing
 end
 
+function snoop_method(s, o)
+    str = String(take!(LineEdit.buffer(s)))
+    ispc = findfirst(isequal(' '), str)
+    nstr, cmdstr = str[1:prevind(str, ispc)], str[nextind(str, ispc):end]
+    n = tryparse(Int, nstr)
+    n === nothing && @goto writeback
+    if n <= 0 || n > length(saved_stacktrace)
+        @goto writeback
+    end
+    method = saved_stacktrace[n]
+    if occursin("REPL", String(method.file))
+        @warn "cannot capture variables for methods defined at the REPL"
+        @goto writeback
+    end
+    LineEdit.refresh_line(s)
+
+    letcmd = try
+        _snoop_method(method, cmdstr, n)
+    catch
+        @goto notcalled
+    end
+    letcmd === nothing && return nothing
+    saved_args[] === nothing && @goto notcalled
+    LineEdit.edit_insert(s, letcmd)
+    return n, nothing
+
+    @label writeback
+    write(LineEdit.buffer(s), str)
+    return n, nothing
+
+    @label notcalled
+    print('\n')
+    @warn "method $method\n  was not called by $cmdstr"
+    return nothing
+end
+
+function _snoop_method(method, command, n)
+    ref = generate_let_command!(Ref{Any}(nothing), method, command, "method $n with $command"; on_err=false)
+    ref === nothing && return nothing
+    ref[]
+end
+
 function capturevars(s, o, when)
     n, method = methtrace_selection(s)
     method === nothing && return nothing
@@ -187,14 +209,22 @@ argstring(argnames) = length(argnames) == 1 ? argnames[1] : '(' * join(argnames,
 const revisekeys = Dict{Any,Any}(
     "\es" => (s, o...) -> begin
         saved_command[] = Base.active_repl.interface.modes[1].hist.history[end]
-        overwrite!(saved_stacktrace, last_stacktrace)
-        println("stacktrace saved")
+        if startswith(saved_command[], "methods")
+            mths = Core.eval(Main, Meta.parse(saved_command[]))
+            overwrite!(saved_stacktrace, collect(mths))
+            println("method list saved")
+        else
+            overwrite!(saved_stacktrace, last_stacktrace)
+            println("stacktrace saved")
+        end
     end,
     # Capture calling vars
     "\ee" => (s, o...) -> capturevars(s, o, :enter),
     "\eE" => (s, o...) -> capturevars(s, o, :enter, :let),
     "\ex" => (s, o...) -> capturevars(s, o, :exit),
     "\eX" => (s, o...) -> capturevars(s, o, :exit, :let),
+    # Method snooping
+    "\em" => (s, o...) -> snoop_method(s, o)
 )
 
 """

@@ -26,9 +26,12 @@ function param(z::S, a=""; kwarg::Bool=false) where S <: AbstractVector{T} where
     error("oops")
 end
 
+
 snoop0()             = snoop1("Spy")
 snoop1(word)         = snoop2(word, "on")
 snoop2(word1, word2) = snoop3(word1, word2, "arguments")
 snoop3(word1, word2, word3::T; adv="simply") where T = join([word1, word2, word3, adv], ' ')
+snoop3()             = "wrong number of args"
+snoop3(word1::Int, word2::Int, word3::Int; adv=false) = "not called"
 
 end

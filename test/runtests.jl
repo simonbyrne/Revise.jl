@@ -915,11 +915,16 @@ revise_f(x) = 2
         @test_throws ErrorException("oops") eval(Meta.parse(ref[]))
 
         # snoop_method
-        m = first(methods(ReviseCapture.snoop3))
-        cmd = Revise._snoop_method(m, "ReviseCapture.snoop0()")
+        m = @which ReviseCapture.snoop3("1", "2", "3")
+        cmd = Revise._snoop_method(m, "ReviseCapture.snoop0()", -1)
         @test occursin("word1, word2, word3, adv, T", cmd)
-        @test occursin("# ReviseCapture.snoop0()", cmd)
+        @test occursin("# method -1 with ReviseCapture.snoop0()", cmd)
         @test Revise.saved_args[] == ("Spy", "on", "arguments", "simply", String)
+        m = @which ReviseCapture.snoop3(1, 2, 3)
+        cmd = Revise._snoop_method(m, "ReviseCapture.snoop0()", -1)
+        @test Revise.saved_args[] == nothing
+        m = @which ReviseCapture.snoop3()
+        @test_throws BoundsError Revise._snoop_method(m, "ReviseCapture.snoop0()", -1)
     end
 
     @testset "Distributed" begin
