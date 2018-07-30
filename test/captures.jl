@@ -11,6 +11,15 @@ function errors_on(vec, val)
 end
 @noinline err_on(x, val) = x == val ? error("oops") : x
 
+function errors_on!(vec, val)
+    local ret
+    while !isempty(vec)
+        err_on(last(vec), val)
+        ret = pop!(vec)
+    end
+    ret
+end
+
 Tval = Ref{Any}(nothing)
 function param(z::S, a=""; kwarg::Bool=false) where S <: AbstractVector{T} where T
     Tval[] = T

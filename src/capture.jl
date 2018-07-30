@@ -17,7 +17,9 @@ eval_noinfo(mod::Module, ex::Expr) = ccall(:jl_toplevel_eval, Any, (Any, Any), m
     argnames = capture(method, command; on_err::Bool=false, params::Bool=false)
 
 Runs `command` (a string or Expr) while capturing the input arguments to `Revise.saved_args[]`.
-If `on_err` is `true`, capturing occurs only if the function throws an error.
+If `on_err` is `true`, capturing occurs only *after* the function throws an error.
+This greatly reduces the performance hit of capturing but can be misleading for functions that
+modify their arguments.
 
 The argument values are stored as a tuple in `Revise.saved_args[]`. If capture fails
 (e.g., the method never gets called, or never throws an error while `on_err==true`),
@@ -52,7 +54,7 @@ function capture(method::Method, command::Expr; on_err::Bool=false, params::Bool
         end
         return result
     end : quote
-        Main.Revise.saved_args[] = ($(allnames...),)
+        Main.Revise.saved_args[] = Main.Revise.safe_deepcopy($(allnames...))
         return $tmpname($(argnames...))
     end
     capture_function = Expr(:function, sig, capture_body)
@@ -61,6 +63,7 @@ function capture(method::Method, command::Expr; on_err::Bool=false, params::Bool
     Core.eval(mod, capture_function)
     try # Once we've `eval`ed capture_function, we can't exit until we've restored the original method
         Core.eval(mod, tmp_function)
+        # Run the command
         try
             Core.eval(Main, command)
             if on_err && Revise.saved_args[] === nothing
@@ -109,10 +112,10 @@ function generate_let_command!(refstring::Ref, method, command, annotation; on_e
     methodvars = capture(method, command; on_err=on_err, params=true)
     methodvars === nothing && return nothing
     isempty(methodvars) && (@warn "no arguments"; return nothing)
-    argstring = '(' * join(methodvars, ", ") * ",)"
+    vars = argstring(methodvars)
     body = convert(Expr, striplines!(deepcopy(funcdef_body(get_def(method)))))
     refstring[] = """
-        @eval $(method.module) let $argstring = Main.Revise.saved_args[]  # $annotation
+        @eval $(method.module) let $vars = Main.Revise.saved_args[]  # $annotation
         $body
         end"""
     return refstring
@@ -155,40 +158,49 @@ function methtrace_selection(s)
     return n, nothing
 end
 
+function capturevars(s, o, when)
+    n, method = methtrace_selection(s)
+    method === nothing && return nothing
+    argnames = capture(method, saved_command[]; on_err=when==:exit)
+    argnames === nothing && return nothing
+    isempty(argnames) && (@warn "no arguments"; return nothing)
+    vars = argstring(argnames)
+    LineEdit.edit_insert(s, "$vars = Revise.saved_args[]  # stackframe $n")
+    return nothing
+end
+
+function capturevars(s, o, when, letsym)
+    @assert letsym == :let
+    if isempty(LineEdit.buffer(s).data) && saved_let_command[] !== nothing
+        LineEdit.edit_insert(s, saved_let_command[])
+        return nothing
+    end
+    n, method = methtrace_selection(s)
+    method === nothing && return nothing
+    ref = generate_let_command!(saved_let_command, method, saved_command[], "stackframe $n"; on_err=when==:exit)
+    isa(ref, Ref) && LineEdit.edit_insert(s, ref[])
+    return nothing
+end
+
+argstring(argnames) = length(argnames) == 1 ? argnames[1] : '(' * join(argnames, ", ") * ')'
+
 const revisekeys = Dict{Any,Any}(
-    "\et" => (s, o...) -> begin
+    "\es" => (s, o...) -> begin
         saved_command[] = Base.active_repl.interface.modes[1].hist.history[end]
         overwrite!(saved_stacktrace, last_stacktrace)
         println("stacktrace saved")
     end,
     # Capture calling vars
-    "\ec" => (s, o...) -> begin
-        n, method = methtrace_selection(s)
-        method === nothing && return nothing
-        argnames = capture(method, saved_command[]; on_err=true)
-        argnames === nothing && return nothing
-        isempty(argnames) && (@warn "no arguments"; return nothing)
-        # argstring = length(argnames) == 1 ? String(argnames[1]) : '(' * join(argnames, ", ") * ')'
-        argstring = '(' * join(argnames, ", ") * ",)"
-        LineEdit.edit_insert(s, "$argstring = Revise.saved_args[]  # stackframe $n")
-        return nothing
-    end,
-    "\eC" => (s, o...) -> begin
-        if isempty(LineEdit.buffer(s).data) && saved_let_command[] !== nothing
-            LineEdit.edit_insert(s, saved_let_command[])
-            return nothing
-        end
-        n, method = methtrace_selection(s)
-        method === nothing && return nothing
-        ref = generate_let_command!(saved_let_command, method, saved_command[], "stackframe $n"; on_err=true)
-        isa(ref, Ref) && LineEdit.edit_insert(s, ref[])
-        return nothing
-    end,
+    "\ee" => (s, o...) -> capturevars(s, o, :enter),
+    "\eE" => (s, o...) -> capturevars(s, o, :enter, :let),
+    "\ex" => (s, o...) -> capturevars(s, o, :exit),
+    "\eX" => (s, o...) -> capturevars(s, o, :exit, :let),
 )
 
 """
     Revise.customize_keys(repl)
 
+FIXME
 Add key bindings for variable-capture from stacktraces:
 - <stackframe #>Meta-c (e.g., 2Alt-c) will capture to variables in `Main`;
 - <stackframe #>Meta-C (e.g., 2Alt-Shift-c) captures to variables in a module-evaluated
@@ -237,3 +249,9 @@ julia> (othername,) = Revise.saved_args[]  # stackframe 2
 function customize_keys(repl)
     repl.interface = REPL.setup_interface(repl; extra_repl_keymap = revisekeys)
 end
+
+safe_deepcopy(a, args...) = (_deepcopy(a), safe_deepcopy(args...)...)
+safe_deepcopy() = ()
+
+_deepcopy(a) = deepcopy(a)
+_deepcopy(a::Module) = a

@@ -861,13 +861,13 @@ revise_f(x) = 2
         # Coverage here is only partial because it's difficult to test interactive utilities
         @test_throws ErrorException("oops") ReviseCapture.errors_on(1:5, 3)
         @test ReviseCapture.errors_on(1:5, 8) == 5
-        # Snoop on the "outer" method
+        # Capture from the "outer" method
         m = first(methods(ReviseCapture.errors_on))
         @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 3)"; on_err=true)  == (:vec, :val)
         @test Revise.saved_args[] == (1:5, 3)
         @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 8)"; on_err=false) == (:vec, :val)
         @test Revise.saved_args[] == (1:5, 8)
-        # Snoop on the "inner" method
+        # Capture from the "inner" method
         m = first(methods(ReviseCapture.err_on))
         @test Revise.capture(m, "ReviseCapture.errors_on(1:5, 3)"; on_err=true)  == (:x, :val)
         @test Revise.saved_args[] == (3, 3)
@@ -887,7 +887,18 @@ revise_f(x) = 2
         @test_throws ErrorException("oops") ReviseCapture.err_on(1, 1)
         @test Revise.saved_args[] == "junk"
 
-        # let blocks
+        # Capturing with functions that modify their arguments
+        @test_throws ErrorException("oops") ReviseCapture.errors_on!([1,2,3,4,5], 3)
+        @test ReviseCapture.errors_on!([1,2,3,4,5], 8) == 1
+        m = first(methods(ReviseCapture.errors_on!))
+        @test Revise.capture(m, "ReviseCapture.errors_on!([1,2,3,4,5], 3)"; on_err=true)  == (:vec, :val)
+        @test Revise.saved_args[] == ([1,2,3], 3)
+        @test Revise.capture(m, "ReviseCapture.errors_on!([1,2,3,4,5], 8)"; on_err=false) == (:vec, :val)
+        @test Revise.saved_args[] == ([1,2,3,4,5], 8)
+        @test Revise.capture(m, "ReviseCapture.errors_on!([1,2,3,4,5], 3)"; on_err=false)  == (:vec, :val)
+        @test Revise.saved_args[] == ([1,2,3,4,5], 3)
+
+        # Capture with let blocks
         m = first(methods(ReviseCapture.param))
         @test Revise.capture(m, "ReviseCapture.param(Int[])") == (:z, :a, :kwarg)
         @test Revise.saved_args[] == (Int[], "", false)
